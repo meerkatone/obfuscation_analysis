@@ -1,4 +1,4 @@
-# Obfuscation Analysis (v1.2)
+# Obfuscation Analysis (v1.3)
 Authors: **Tim Blazytko & Nicolò Altamura**
 
 _Analyze and simplify obfuscated code_
