@@ -3,9 +3,22 @@ from binaryninja.binaryview import BinaryView
 from binaryninja.function import Function
 from binaryninja.highlevelil import HighLevelILInstruction
 
-from .mba.simplifer import get_simplifier
-from .mba.slicing import backward_slice_basic_block_level
 from .utils import build_call_graph_from_function, find_corrupted_functions, user_error
+
+
+def _load_mba_helpers():
+    try:
+        from .mba.simplifer import get_simplifier
+        from .mba.slicing import backward_slice_basic_block_level
+    except Exception as err:
+        user_error(
+            "Could not load MBA simplification support. Install the plugin "
+            "requirements before using MBA simplification.",
+            exc=err,
+        )
+        return None, None
+
+    return get_simplifier, backward_slice_basic_block_level
 
 
 def simplify_hlil_mba_slice_at(
@@ -50,6 +63,9 @@ def simplify_hlil_mba_slice_at(
       ``instruction.function.source_function`` at `instruction.address`.
     * No value is returned; caller need not inspect a result.
     """
+    get_simplifier, backward_slice_basic_block_level = _load_mba_helpers()
+    if get_simplifier is None or backward_slice_basic_block_level is None:
+        return
 
     # backward slice in SSA form
     try:

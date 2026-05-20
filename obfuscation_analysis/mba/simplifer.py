@@ -11,18 +11,20 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import Lock
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from binaryninja.settings import Settings
-from msynth import Simplifier
 
 from ..utils import user_error
+
+if TYPE_CHECKING:
+    from msynth import Simplifier
 
 # ----------------------------------------------------------------------
 # Internal singleton state
 # ----------------------------------------------------------------------
 
-_MBA_SIMPLIFIER: Optional[Simplifier] = None
+_MBA_SIMPLIFIER: Optional["Simplifier"] = None
 _LOCK = Lock()  # guards first-time creation
 
 
@@ -31,7 +33,7 @@ _LOCK = Lock()  # guards first-time creation
 # ----------------------------------------------------------------------
 
 
-def get_simplifier() -> Optional[Simplifier]:
+def get_simplifier() -> Optional["Simplifier"]:
     """
     Return the global `Simplifier` instance, creating it on first use.
 
@@ -71,6 +73,8 @@ def get_simplifier() -> Optional[Simplifier]:
 
         # ---- create Simplifier ------------------------------------------
         try:
+            from msynth import Simplifier
+
             _MBA_SIMPLIFIER = Simplifier(oracle_path=oracle_path)
         except Exception as err:  # pragma: no cover
             user_error(
@@ -82,7 +86,7 @@ def get_simplifier() -> Optional[Simplifier]:
     return _MBA_SIMPLIFIER
 
 
-def set_simplifier(simplifier: Simplifier) -> None:
+def set_simplifier(simplifier: "Simplifier") -> None:
     """
     Manually inject a pre-created `Simplifier`.
     """

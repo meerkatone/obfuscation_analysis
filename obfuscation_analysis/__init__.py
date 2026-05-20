@@ -228,10 +228,9 @@ def inline_functions_recursively_max_depth_bg(
     BGTask2Param(
         bv=bv,
         param1=function,
-        param2=int(
-            Settings()
-            .get_string("obfuscation_analysis.function_inlining_max_depth")
-            .strip()
+        param2=max(
+            1,
+            Settings().get_integer("obfuscation_analysis.function_inlining_max_depth"),
         ),
         msg="Inlining functions recursively",
         fn=inline_functions_recursively,
