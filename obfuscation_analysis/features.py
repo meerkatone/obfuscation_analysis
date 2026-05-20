@@ -1,5 +1,3 @@
-from typing import Iterable
-
 import networkx as nx
 from binaryninja.binaryview import BinaryView
 from binaryninja.function import Function
@@ -7,8 +5,7 @@ from binaryninja.highlevelil import HighLevelILInstruction
 
 from .mba.simplifer import get_simplifier
 from .mba.slicing import backward_slice_basic_block_level
-from .utils import (build_call_graph_from_function, find_corrupted_functions,
-                    user_error)
+from .utils import build_call_graph_from_function, find_corrupted_functions, user_error
 
 
 def simplify_hlil_mba_slice_at(
@@ -21,22 +18,22 @@ def simplify_hlil_mba_slice_at(
 
     Workflow
     --------
-    1. Backward slice (single BB) –  
+    1. Backward slice (single BB) –
        `backward_slice_basic_block_level` resolves the instruction’s SSA
        dependency chain and translates the fully-inlined expression to
        Miasm IR.
-    2. MBA simplification –  
+    2. MBA simplification –
        The cached simplifier canonicalises the Mixed-
        Boolean Arithmetic (MBA) expression.
-    3. Annotate –  
+    3. Annotate –
        The simplified expression is attached as a decompiler comment at the
        instruction’s address.
 
     Error handling
     --------------
-    * Any failure in translation or simplification is caught locally.  
+    * Any failure in translation or simplification is caught locally.
     * A concise red line appears in Binary Ninja’s log; the full traceback
-      is available when *Debug Log* is enabled.  
+      is available when *Debug Log* is enabled.
     * The function then returns early, leaving no partial comment behind.
 
     Parameters
@@ -54,16 +51,19 @@ def simplify_hlil_mba_slice_at(
     * No value is returned; caller need not inspect a result.
     """
 
-# backward slice in SSA form
+    # backward slice in SSA form
     try:
         expr_m2 = backward_slice_basic_block_level(
-            bv, instruction, instruction.function.ssa_form)
+            bv, instruction, instruction.function.ssa_form
+        )
         # if assignment, only take right-hand side
         if expr_m2.is_assign():
             expr_m2 = expr_m2.src
     except Exception as err:
         user_error(
-            f"Failed to translate HLIL expression at {hex(instruction.address)} to Miasm IR: {err}", exc=err)
+            f"Failed to translate HLIL expression at {hex(instruction.address)} to Miasm IR: {err}",
+            exc=err,
+        )
         return
 
     # get simplifier
@@ -76,7 +76,9 @@ def simplify_hlil_mba_slice_at(
         simplified = simplifier.simplify(expr_m2)
     except Exception as err:
         user_error(
-            f"Could not simplify HLIL expression at address {hex(instruction.address)} using msynth: {err}", exc=err)
+            f"Could not simplify HLIL expression at address {hex(instruction.address)} using msynth: {err}",
+            exc=err,
+        )
         return
 
     # add simplified expression as comment
@@ -90,7 +92,7 @@ def identify_corrupted_functions(bv: BinaryView) -> None:
     """
     Emit a diagnostic list of functions with corrupted disassembly.
 
-    A function is treated as corrupted, which typically happens if the linear sweep 
+    A function is treated as corrupted, which typically happens if the linear sweep
     created overlapping or undefined instructions—common in packed/obfuscated binaries.
 
     Parameters
@@ -125,7 +127,9 @@ def remove_corrupted_functions(bv: BinaryView) -> None:
     bv.update_analysis()
 
 
-def inline_functions_recursively(bv: BinaryView, start_func: Function, max_depth: int = 0) -> None:
+def inline_functions_recursively(
+    bv: BinaryView, start_func: Function, max_depth: int = 0
+) -> None:
     """
     Recursively inline every function that is reachable from `start_func`
     so the decompiler can run a true cross-function analysis on a single,
@@ -194,12 +198,11 @@ def inline_functions_recursively(bv: BinaryView, start_func: Function, max_depth
         # depth map from BFS on the *original* call-graph.
         # Distance == minimal number of calls from start_func to each function.
         if max_depth > 0:
-            func_dist = nx.single_source_shortest_path_length(
-                call_graph, start_func)
+            func_dist = nx.single_source_shortest_path_length(call_graph, start_func)
 
             # Helper: minimal distance among members of a component (SCC).
             def comp_min_distance(comp_id: int) -> int | None:
-                members = condensed_dag.nodes[comp_id].get('members', [])
+                members = condensed_dag.nodes[comp_id].get("members", [])
                 md = None
                 for fn in members:
                     d = func_dist.get(fn)
@@ -216,7 +219,7 @@ def inline_functions_recursively(bv: BinaryView, start_func: Function, max_depth
                 if d is None or d == 0 or d > max_depth:
                     continue
 
-            for func in condensed_dag.nodes[component]['members']:
+            for func in condensed_dag.nodes[component]["members"]:
                 if not func.is_thunk:
                     func.inline_during_analysis = True
     finally:

@@ -9,9 +9,12 @@ from binaryninja.settings import Settings
 from binaryninja.function import Function
 
 
-from .features import (identify_corrupted_functions,
-                       inline_functions_recursively,
-                       remove_corrupted_functions, simplify_hlil_mba_slice_at)
+from .features import (
+    identify_corrupted_functions,
+    inline_functions_recursively,
+    remove_corrupted_functions,
+    simplify_hlil_mba_slice_at,
+)
 
 # ---------------------------------------------------------------------------
 # Internal background-task wrappers
@@ -122,6 +125,7 @@ class BGTask2Param(BackgroundTaskThread, Generic[T]):
 # Public helpers used by the plugin’s UI commands
 # ---------------------------------------------------------------------------
 
+
 def simplify_hlil_instruction_bg(
     bv: BinaryView,
     instruction: HighLevelILInstruction,
@@ -207,7 +211,9 @@ def inline_functions_recursively_bg(bv: BinaryView, function: Function) -> None:
     ).start()
 
 
-def inline_functions_recursively_max_depth_bg(bv: BinaryView, function: Function) -> None:
+def inline_functions_recursively_max_depth_bg(
+    bv: BinaryView, function: Function
+) -> None:
     """
     Inlines functions recursivly in the decompiler, enabling a cross-function
     analysis in a background thread.
@@ -222,7 +228,11 @@ def inline_functions_recursively_max_depth_bg(bv: BinaryView, function: Function
     BGTask2Param(
         bv=bv,
         param1=function,
-        param2=int(Settings().get_string("obfuscation_analysis.function_inlining_max_depth").strip()),
+        param2=int(
+            Settings()
+            .get_string("obfuscation_analysis.function_inlining_max_depth")
+            .strip()
+        ),
         msg="Inlining functions recursively",
         fn=inline_functions_recursively,
     ).start()

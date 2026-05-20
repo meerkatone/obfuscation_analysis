@@ -6,6 +6,7 @@ Singleton wrapper around msynth’s `Simplifier`.
 *  Emits concise user errors (with full trace in *Debug* log) when the
    oracle path is missing or the initialisation fails.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -29,6 +30,7 @@ _LOCK = Lock()  # guards first-time creation
 # Public helpers
 # ----------------------------------------------------------------------
 
+
 def get_simplifier() -> Optional[Simplifier]:
     """
     Return the global `Simplifier` instance, creating it on first use.
@@ -51,9 +53,9 @@ def get_simplifier() -> Optional[Simplifier]:
         if _MBA_SIMPLIFIER is not None:
             return _MBA_SIMPLIFIER
 
-        oracle_path = Settings().get_string(
-            "obfuscation_analysis.mba_oracle_path"
-        ).strip()
+        oracle_path = (
+            Settings().get_string("obfuscation_analysis.mba_oracle_path").strip()
+        )
 
         # ---- configuration sanity checks --------------------------------
         if not oracle_path:

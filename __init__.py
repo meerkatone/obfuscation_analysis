@@ -4,17 +4,20 @@ Binary Ninja plugin entrypoint for *Obfuscation Analysis*.
 Registers UI commands, user-visible settings, and wires them to the
 background-thread helpers.
 """
+
 import json
 from pathlib import Path
 
 from binaryninja import PluginCommand
 from binaryninja.settings import Settings
 
-from .obfuscation_analysis import (identify_corrupted_functions_bg,
-                                   inline_functions_recursively_bg,
-                                   inline_functions_recursively_max_depth_bg,
-                                   remove_corrupted_functions_bg,
-                                   simplify_hlil_instruction_bg)
+from .obfuscation_analysis import (
+    identify_corrupted_functions_bg,
+    inline_functions_recursively_bg,
+    inline_functions_recursively_max_depth_bg,
+    remove_corrupted_functions_bg,
+    simplify_hlil_instruction_bg,
+)
 
 # ----------------------------------------------------------------------
 #  Command registrations

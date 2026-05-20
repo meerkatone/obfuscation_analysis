@@ -93,7 +93,7 @@ def has_undefined_instructions(func: Function) -> bool:
     2. In linear disassembly view a basic block is either
        * empty,
        * marked by Binary Ninja as `has_invalid_instructions`,
-         **or**  
+         **or**
        * ends with an instruction that renders as ``"??"``.
 
     These conditions catch the most common artefacts produced by badly

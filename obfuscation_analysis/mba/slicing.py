@@ -4,8 +4,11 @@ from typing import Optional
 
 from binaryninja import SSAVariable
 from binaryninja.binaryview import BinaryView
-from binaryninja.highlevelil import (HighLevelILFunction,
-                                     HighLevelILInstruction, HighLevelILVarPhi)
+from binaryninja.highlevelil import (
+    HighLevelILFunction,
+    HighLevelILInstruction,
+    HighLevelILVarPhi,
+)
 from miasm.expression.expression import Expr
 
 from .translation import hlil_to_miasm, ssa_variable_to_miasm
@@ -24,14 +27,14 @@ def backward_slice_basic_block_level(
     ------------------------------
     1. Translate the root `instr.ssa_form` to Miasm (`expr_m2`).
     2. Build a work-list with every SSA variable the root expression reads.
-    3. While the work-list is not empty:  
-       a. Pop one SSA variable.  
+    3. While the work-list is not empty:
+       a. Pop one SSA variable.
        b. Fetch its definition. Skip if it lies outside the same basic block
-          or is a `HLIL_VAR_PHI`.  
+          or is a `HLIL_VAR_PHI`.
        c. Translate the definition’s *source* to Miasm; if translation
-          raises an *Exception*, skip that variable.  
+          raises an *Exception*, skip that variable.
        d. Immediately substitute the SSA variable in `expr_m2` with the
-          translated sub-expression.  
+          translated sub-expression.
        e. Push every *new* SSA variable the definition reads onto the
           work-list.
 
@@ -58,8 +61,11 @@ def backward_slice_basic_block_level(
     expr_m2 = hlil_to_miasm(bv, expr)
 
     # init worklist with variable uses (variables in a SSA form)
-    worklist = [v for v in set(expr.ssa_form.vars_read)
-                if isinstance(v, SSAVariable) and hlil.get_ssa_var_definition(v) != None]
+    worklist = [
+        v
+        for v in set(expr.ssa_form.vars_read)
+        if isinstance(v, SSAVariable) and hlil.get_ssa_var_definition(v) is not None
+    ]
 
     # replacement dictionary for miasm expression
     replacements = {}
@@ -85,13 +91,14 @@ def backward_slice_basic_block_level(
             continue
 
         # replace SSA variable with its definition in miasm IR
-        replacements[ssa_variable_to_miasm(
-            variable)] = hlil_to_miasm(bv, definition.src)
+        replacements[ssa_variable_to_miasm(variable)] = hlil_to_miasm(
+            bv, definition.src
+        )
         expr_m2 = expr_m2.replace_expr(replacements)
 
         # add variable uses to worklist
         for v in set(definition.vars_read):
-            if hlil.get_ssa_var_definition(v) != None:
+            if hlil.get_ssa_var_definition(v) is not None:
                 worklist.append(v)
 
     return expr_m2
