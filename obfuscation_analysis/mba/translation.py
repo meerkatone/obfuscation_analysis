@@ -21,6 +21,46 @@ from miasm.expression.expression import (
 )
 
 
+def _expr_size_bits(expr: ExpressionIndex, default: int = 0) -> int:
+    """
+    Return a Binary Ninja HLIL expression size in bits.
+    """
+    return expr.size * 8 if expr.size else default
+
+
+def _coerce_size(expr: Expr, size: int, signed: bool = False) -> Expr:
+    """
+    Resize an expression to ``size`` bits for Miasm operators that require
+    equal-sized operands.
+    """
+    if expr.size == size:
+        return expr
+    if expr.size < size:
+        return expr.signExtend(size) if signed else expr.zeroExtend(size)
+    return ExprSlice(expr, 0, size)
+
+
+def _coerce_right(left: Expr, right: Expr, signed: bool = False) -> Expr:
+    """
+    Resize a binary operation RHS to the LHS width.
+    """
+    return _coerce_size(right, left.size, signed=signed)
+
+
+def _bool_result(expr: ExpressionIndex, condition: Expr) -> Expr:
+    """
+    Convert a 1-bit Miasm predicate to Binary Ninja's boolean result width.
+    """
+    return condition.zeroExtend(_expr_size_bits(expr, default=8))
+
+
+def _shift_count(left: Expr, right: Expr) -> Expr:
+    """
+    Miasm shift/rotate operators require equal-sized operands.
+    """
+    return _coerce_right(left, right)
+
+
 def variable_to_miasm(v: Variable) -> ExprId:
     """
     Convert a non-SSA Binary Ninja `Variable to a Miasm.
@@ -96,7 +136,7 @@ def hlil_to_miasm(
         When *expr* (or any of its children) represents a construct that
         cannot be mapped to Miasm IR—for example:
 
-        * High-level control flow (`HLIL_IF`, `HLIL_SWITCH`, …)
+        * High-level control flow (`HLIL_SWITCH`, loops, …)
         * SSA PHI or memory-PHI nodes
         * Intrinsic or unimplemented HLIL operations
 
@@ -116,14 +156,44 @@ def hlil_to_miasm(
             return hlil_to_miasm(bv, expr.condition)
 
         case HighLevelILOperation.HLIL_JUMP:
-            # translate jump target
-            return hlil_to_miasm(bv, expr.operands[0])
+            raise Exception(
+                f"Unsupported translation for control-flow operation: {expr.core_instr}"
+            )
 
         case HighLevelILOperation.HLIL_LABEL:
-            return ExprId(expr.target, expr.size)
+            raise Exception(
+                f"Unsupported translation for control-flow operation: {expr.core_instr}"
+            )
 
         case HighLevelILOperation.HLIL_ASSIGN_MEM_SSA:
-            lhs = hlil_to_miasm(bv, expr.dest)
+            rhs = hlil_to_miasm(bv, expr.src)
+            lhs = ExprMem(hlil_to_miasm(bv, expr.dest), rhs.size)
+            return ExprAssign(lhs, rhs)
+
+        case HighLevelILOperation.HLIL_DEREF:
+            ex = hlil_to_miasm(bv, expr.src)
+            return ExprMem(ex, _expr_size_bits(expr))
+
+        case HighLevelILOperation.HLIL_DEREF_SSA:
+            ex = hlil_to_miasm(bv, expr.src)
+            return ExprMem(ex, _expr_size_bits(expr))
+
+        case HighLevelILOperation.HLIL_DEREF_FIELD:
+            ptr = hlil_to_miasm(bv, expr.src)
+            offset = ExprInt(expr.offset, ptr.size)
+            return ExprMem(ptr + offset, _expr_size_bits(expr))
+
+        case HighLevelILOperation.HLIL_DEREF_FIELD_SSA:
+            ptr = hlil_to_miasm(bv, expr.src)
+            offset = ExprInt(expr.offset, ptr.size)
+            return ExprMem(ptr + offset, _expr_size_bits(expr))
+
+        case HighLevelILOperation.HLIL_ASSIGN_UNPACK_MEM_SSA:
+            if len(expr.dest) != 1:
+                raise Exception(
+                    f"Unsupported translation for multi-destination assignment: {expr.core_instr}"
+                )
+            lhs = hlil_to_miasm(bv, expr.dest[0])
             rhs = hlil_to_miasm(bv, expr.src)
             return ExprAssign(lhs, rhs)
 
@@ -139,17 +209,15 @@ def hlil_to_miasm(
             size = 8 * bv.arch.address_size
             return ExprId(name, size)
 
-        case HighLevelILOperation.HLIL_DEREF_SSA:
-            ex = hlil_to_miasm(bv, expr.operands[0])
-            return ExprMem(ex, 8 * expr.size)
-
         case HighLevelILOperation.HLIL_CONST_PTR:
-            ex = ExprInt(expr.operands[0], expr.size * 8)
+            ex = ExprInt(expr.constant, _expr_size_bits(expr))
             return ex
 
         case HighLevelILOperation.HLIL_IMPORT:
-            ex = ExprInt(expr.operands[0], expr.size * 8)
-            return ExprId(ex, expr.size)
+            return ExprInt(expr.constant, _expr_size_bits(expr))
+
+        case HighLevelILOperation.HLIL_EXTERN_PTR:
+            return ExprInt(expr.constant + expr.offset, _expr_size_bits(expr))
 
         # SSA assignment
         case HighLevelILOperation.HLIL_VAR_INIT_SSA:
@@ -167,12 +235,24 @@ def hlil_to_miasm(
             src = hlil_to_miasm(bv, expr.src)
             return ExprSlice(src, expr.offset * 8, expr.offset * 8 + expr.size * 8)
 
-        case HighLevelILOperation.HLIL_ARRAY_INDEX_SSA:
+        case HighLevelILOperation.HLIL_ARRAY_INDEX:
             base_memory = hlil_to_miasm(bv, expr.src)
-            indexed = hlil_to_miasm(bv, expr.index)
+            indexed = _coerce_size(
+                hlil_to_miasm(bv, expr.index), bv.arch.address_size * 8
+            )
             return ExprMem(
                 base_memory + (indexed * ExprInt(expr.size, bv.arch.address_size * 8)),
-                expr.size * 8,
+                _expr_size_bits(expr),
+            )
+
+        case HighLevelILOperation.HLIL_ARRAY_INDEX_SSA:
+            base_memory = hlil_to_miasm(bv, expr.src)
+            indexed = _coerce_size(
+                hlil_to_miasm(bv, expr.index), bv.arch.address_size * 8
+            )
+            return ExprMem(
+                base_memory + (indexed * ExprInt(expr.size, bv.arch.address_size * 8)),
+                _expr_size_bits(expr),
             )
 
         case HighLevelILOperation.HLIL_SPLIT:
@@ -197,129 +277,191 @@ def hlil_to_miasm(
         # binary arithmetic/logical operations
         case HighLevelILOperation.HLIL_ADD:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return left + right
+            return left + _coerce_right(left, right)
+
+        case HighLevelILOperation.HLIL_ADC:
+            left = hlil_to_miasm(bv, expr.left)
+            right = _coerce_right(left, hlil_to_miasm(bv, expr.right))
+            carry = _coerce_size(hlil_to_miasm(bv, expr.carry), left.size)
+            return left + right + carry
 
         case HighLevelILOperation.HLIL_SUB:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return left - right
+            return left - _coerce_right(left, right)
 
         case HighLevelILOperation.HLIL_SBB:
-            left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return left - right
+            left = hlil_to_miasm(bv, expr.left)
+            right = _coerce_right(left, hlil_to_miasm(bv, expr.right))
+            carry = _coerce_size(hlil_to_miasm(bv, expr.carry), left.size)
+            return left - (right + carry)
 
         case HighLevelILOperation.HLIL_AND:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return left & right
+            return left & _coerce_right(left, right)
 
         case HighLevelILOperation.HLIL_OR:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return left | right
+            return left | _coerce_right(left, right)
 
         case HighLevelILOperation.HLIL_XOR:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return left ^ right
+            return left ^ _coerce_right(left, right)
 
         case HighLevelILOperation.HLIL_MUL:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
+            return left * _coerce_right(left, right)
+
+        case HighLevelILOperation.HLIL_MULU_DP:
+            size = _expr_size_bits(expr)
+            left = _coerce_size(hlil_to_miasm(bv, expr.left), size * 2)
+            right = _coerce_size(hlil_to_miasm(bv, expr.right), size * 2)
             return left * right
 
+        case HighLevelILOperation.HLIL_MULS_DP:
+            size = _expr_size_bits(expr)
+            left = _coerce_size(hlil_to_miasm(bv, expr.left), size * 2, signed=True)
+            right = _coerce_size(hlil_to_miasm(bv, expr.right), size * 2, signed=True)
+            return left * right
+
+        case HighLevelILOperation.HLIL_DIVU:
+            left = hlil_to_miasm(bv, expr.left)
+            right = _coerce_right(left, hlil_to_miasm(bv, expr.right))
+            return ExprOp("udiv", left, right)
+
         case HighLevelILOperation.HLIL_DIVS:
-            left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return ExprOp("s/", left, right)
+            left = hlil_to_miasm(bv, expr.left)
+            right = _coerce_right(left, hlil_to_miasm(bv, expr.right), signed=True)
+            return ExprOp("sdiv", left, right)
 
         case HighLevelILOperation.HLIL_ASR:
-            left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return left >> right
+            left = hlil_to_miasm(bv, expr.left)
+            right = _shift_count(left, hlil_to_miasm(bv, expr.right))
+            return ExprOp("a>>", left, right)
 
         case HighLevelILOperation.HLIL_LSL:
             left = hlil_to_miasm(bv, expr.left)
-            right = hlil_to_miasm(bv, expr.right).zeroExtend(left.size)
+            right = _shift_count(left, hlil_to_miasm(bv, expr.right))
             return left << right
 
         case HighLevelILOperation.HLIL_LSR:
             left = hlil_to_miasm(bv, expr.left)
-            right = hlil_to_miasm(bv, expr.right).zeroExtend(left.size)
+            right = _shift_count(left, hlil_to_miasm(bv, expr.right))
             return left >> right
 
         case HighLevelILOperation.HLIL_DIVU_DP:
             left = hlil_to_miasm(bv, expr.left)
-            right = hlil_to_miasm(bv, expr.right).zeroExtend(left.size)
-            # the slice here is needed because we're talking about double precision (128bit)
-            return ExprSlice(ExprOp("%", left, right), 0, expr.size * 8)
+            right = _coerce_right(left, hlil_to_miasm(bv, expr.right))
+            return ExprSlice(ExprOp("udiv", left, right), 0, _expr_size_bits(expr))
 
         case HighLevelILOperation.HLIL_DIVS_DP:
             left = hlil_to_miasm(bv, expr.left)
-            right = hlil_to_miasm(bv, expr.right).signExtend(left.size)
-            # the slice here is needed because we're talking about double precision (128bit)
-            return ExprSlice(ExprOp("%", left, right), 0, expr.size * 8)
+            right = _coerce_right(left, hlil_to_miasm(bv, expr.right), signed=True)
+            return ExprSlice(ExprOp("sdiv", left, right), 0, _expr_size_bits(expr))
 
         case HighLevelILOperation.HLIL_MODU:
             left = hlil_to_miasm(bv, expr.left)
-            right = hlil_to_miasm(bv, expr.right).zeroExtend(left.size)
-            return ExprOp("%", left, right)
+            right = _coerce_right(left, hlil_to_miasm(bv, expr.right))
+            return ExprOp("umod", left, right)
 
         case HighLevelILOperation.HLIL_MODU_DP:
             left = hlil_to_miasm(bv, expr.left)
-            right = hlil_to_miasm(bv, expr.right).zeroExtend(left.size)
-            # the slice here is needed because we're talking about double precision (128bit)
-            return ExprSlice(ExprOp("%", left, right), 0, expr.size * 8)
+            right = _coerce_right(left, hlil_to_miasm(bv, expr.right))
+            return ExprSlice(ExprOp("umod", left, right), 0, _expr_size_bits(expr))
+
+        case HighLevelILOperation.HLIL_MODS:
+            left = hlil_to_miasm(bv, expr.left)
+            right = _coerce_right(left, hlil_to_miasm(bv, expr.right), signed=True)
+            return ExprOp("smod", left, right)
 
         case HighLevelILOperation.HLIL_MODS_DP:
             left = hlil_to_miasm(bv, expr.left)
-            right = hlil_to_miasm(bv, expr.right).zeroExtend(left.size)
-            # the slice here is needed because we're talking about double precision (128bit)
-            return ExprSlice(ExprOp("%s", left, right), 0, expr.size * 8)
+            right = _coerce_right(left, hlil_to_miasm(bv, expr.right), signed=True)
+            return ExprSlice(ExprOp("smod", left, right), 0, _expr_size_bits(expr))
 
         case HighLevelILOperation.HLIL_ROR:
             left = hlil_to_miasm(bv, expr.left)
-            right = hlil_to_miasm(bv, expr.right)
+            right = _shift_count(left, hlil_to_miasm(bv, expr.right))
             return ExprOp(">>>", left, right)
 
         case HighLevelILOperation.HLIL_ROL:
             left = hlil_to_miasm(bv, expr.left)
-            right = hlil_to_miasm(bv, expr.right)
+            right = _shift_count(left, hlil_to_miasm(bv, expr.right))
             return ExprOp("<<<", left, right)
 
         # binary comparison
         case HighLevelILOperation.HLIL_CMP_E:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return ExprOp("==", left, right).zeroExtend(8)
+            return _bool_result(expr, ExprOp("==", left, _coerce_right(left, right)))
 
         case HighLevelILOperation.HLIL_CMP_NE:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return (~ExprOp("==", left, right)).zeroExtend(8)
+            return _bool_result(expr, ~ExprOp("==", left, _coerce_right(left, right)))
 
         case HighLevelILOperation.HLIL_CMP_ULT:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return expr_is_unsigned_lower(left, right).zeroExtend(8)
+            return _bool_result(
+                expr, expr_is_unsigned_lower(left, _coerce_right(left, right))
+            )
 
         case HighLevelILOperation.HLIL_CMP_ULE:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return expr_is_unsigned_lower_or_equal(left, right).zeroExtend(8)
+            return _bool_result(
+                expr, expr_is_unsigned_lower_or_equal(left, _coerce_right(left, right))
+            )
 
         case HighLevelILOperation.HLIL_CMP_UGE:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return expr_is_unsigned_greater_or_equal(left, right).zeroExtend(8)
+            return _bool_result(
+                expr,
+                expr_is_unsigned_greater_or_equal(left, _coerce_right(left, right)),
+            )
 
         case HighLevelILOperation.HLIL_CMP_UGT:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return expr_is_unsigned_greater(left, right).zeroExtend(8)
+            return _bool_result(
+                expr, expr_is_unsigned_greater(left, _coerce_right(left, right))
+            )
 
         case HighLevelILOperation.HLIL_CMP_SGT:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return expr_is_signed_greater(left, right).zeroExtend(8)
+            return _bool_result(
+                expr,
+                expr_is_signed_greater(left, _coerce_right(left, right, signed=True)),
+            )
 
         case HighLevelILOperation.HLIL_CMP_SGE:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return expr_is_signed_greater_or_equal(left, right).zeroExtend(8)
+            return _bool_result(
+                expr,
+                expr_is_signed_greater_or_equal(
+                    left, _coerce_right(left, right, signed=True)
+                ),
+            )
 
         case HighLevelILOperation.HLIL_CMP_SLE:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return expr_is_signed_lower_or_equal(left, right).zeroExtend(8)
+            return _bool_result(
+                expr,
+                expr_is_signed_lower_or_equal(
+                    left, _coerce_right(left, right, signed=True)
+                ),
+            )
 
         case HighLevelILOperation.HLIL_CMP_SLT:
             left, right = hlil_to_miasm(bv, expr.left), hlil_to_miasm(bv, expr.right)
-            return expr_is_signed_lower(left, right).zeroExtend(8)
+            return _bool_result(
+                expr,
+                expr_is_signed_lower(left, _coerce_right(left, right, signed=True)),
+            )
+
+        case HighLevelILOperation.HLIL_TEST_BIT:
+            left = hlil_to_miasm(bv, expr.left)
+            right = _shift_count(left, hlil_to_miasm(bv, expr.right))
+            return _bool_result(expr, (left >> right)[:1])
+
+        case HighLevelILOperation.HLIL_BOOL_TO_INT:
+            src = hlil_to_miasm(bv, expr.src)
+            return _coerce_size(src, _expr_size_bits(expr, default=8))
 
         # unary operations
         case HighLevelILOperation.HLIL_NEG:
@@ -346,15 +488,26 @@ def hlil_to_miasm(
             # ensure return has arguments
             if len(expr.src) != 0:
                 return hlil_to_miasm(bv, expr.src[0])
+            raise Exception(
+                f"Unsupported translation for empty return: {expr.core_instr}"
+            )
 
         # unsupported control-flow operations
         case (
             HighLevelILOperation.HLIL_GOTO
             | HighLevelILOperation.HLIL_CASE
+            | HighLevelILOperation.HLIL_JUMP
+            | HighLevelILOperation.HLIL_LABEL
+            | HighLevelILOperation.HLIL_FOR
+            | HighLevelILOperation.HLIL_FOR_SSA
+            | HighLevelILOperation.HLIL_DO_WHILE
             | HighLevelILOperation.HLIL_DO_WHILE_SSA
+            | HighLevelILOperation.HLIL_WHILE
             | HighLevelILOperation.HLIL_WHILE_SSA
             | HighLevelILOperation.HLIL_SWITCH
             | HighLevelILOperation.HLIL_BREAK
+            | HighLevelILOperation.HLIL_CONTINUE
+            | HighLevelILOperation.HLIL_UNREACHABLE
         ):
             raise Exception(
                 f"Unsupported translation for control-flow operation: {expr.core_instr}"
@@ -367,10 +520,41 @@ def hlil_to_miasm(
             | HighLevelILOperation.HLIL_MEM_PHI
             | HighLevelILOperation.HLIL_UNDEF
             | HighLevelILOperation.HLIL_NOP
-            | HighLevelILOperation.HLIL_CONTINUE
             | HighLevelILOperation.HLIL_NORET
+            | HighLevelILOperation.HLIL_CALL
             | HighLevelILOperation.HLIL_CALL_SSA
+            | HighLevelILOperation.HLIL_TAILCALL
+            | HighLevelILOperation.HLIL_INTRINSIC
+            | HighLevelILOperation.HLIL_INTRINSIC_SSA
+            | HighLevelILOperation.HLIL_SYSCALL
+            | HighLevelILOperation.HLIL_SYSCALL_SSA
             | HighLevelILOperation.HLIL_VAR_DECLARE
+            | HighLevelILOperation.HLIL_UNIMPL
+            | HighLevelILOperation.HLIL_UNIMPL_MEM
+            | HighLevelILOperation.HLIL_CONST_DATA
+            | HighLevelILOperation.HLIL_FLOAT_CONST
+            | HighLevelILOperation.HLIL_FADD
+            | HighLevelILOperation.HLIL_FSUB
+            | HighLevelILOperation.HLIL_FMUL
+            | HighLevelILOperation.HLIL_FDIV
+            | HighLevelILOperation.HLIL_FSQRT
+            | HighLevelILOperation.HLIL_FNEG
+            | HighLevelILOperation.HLIL_FABS
+            | HighLevelILOperation.HLIL_FLOAT_TO_INT
+            | HighLevelILOperation.HLIL_INT_TO_FLOAT
+            | HighLevelILOperation.HLIL_FLOAT_CONV
+            | HighLevelILOperation.HLIL_ROUND_TO_INT
+            | HighLevelILOperation.HLIL_FLOOR
+            | HighLevelILOperation.HLIL_CEIL
+            | HighLevelILOperation.HLIL_FTRUNC
+            | HighLevelILOperation.HLIL_FCMP_E
+            | HighLevelILOperation.HLIL_FCMP_NE
+            | HighLevelILOperation.HLIL_FCMP_LT
+            | HighLevelILOperation.HLIL_FCMP_LE
+            | HighLevelILOperation.HLIL_FCMP_GE
+            | HighLevelILOperation.HLIL_FCMP_GT
+            | HighLevelILOperation.HLIL_FCMP_O
+            | HighLevelILOperation.HLIL_FCMP_UO
         ):
             raise Exception(
                 f"Unsupported translation for special operation: {expr.core_instr}"
